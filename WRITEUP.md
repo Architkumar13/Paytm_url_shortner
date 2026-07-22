@@ -19,6 +19,11 @@ Decisions I made and handed to the AI as constraints:
 - **Duplicate-URL policy** — idempotent dedup for auto codes, always-new for custom aliases.
 - **Analytics scope** — lightweight: a click counter, last-access time, per-visit rows, and one
   stats endpoint. Enough to honour the "& Link Analytics" in the title without ballooning scope.
+- **Collision handling & read path** — collision-free codes are `base62(unique id)` rather than
+  hash-plus-Bloom-filter, and the id source sits behind a swappable `IDGenerator` (centralized
+  sequence by default; a Snowflake generator for distributed scale). A **Redis read-through cache**
+  fronts the redirect path because reads dominate writes; the `code → URL` mapping is immutable, so
+  the cache needs no invalidation.
 
 The AI generated the base62 codec, the two store implementations, handlers, and the bulk of the
 tests from those constraints. I reviewed every file, adjusted naming/structure, and verified the
