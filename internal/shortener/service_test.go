@@ -3,6 +3,7 @@ package shortener
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -14,6 +15,22 @@ import (
 func newService() *Service {
 	store := storage.NewMemoryStore()
 	return New(store, NewSequenceGenerator(store), cache.NewNoop(), "http://short.test", time.Minute)
+}
+
+// scriptedIDGen returns a fixed list of ids in order, so tests can force the
+// exact codes Shorten will try (independent of the store's sequence).
+type scriptedIDGen struct {
+	ids []uint64
+	i   int
+}
+
+func (g *scriptedIDGen) NextID(context.Context) (uint64, error) {
+	if g.i >= len(g.ids) {
+		return 0, fmt.Errorf("scriptedIDGen exhausted after %d ids", g.i)
+	}
+	id := g.ids[g.i]
+	g.i++
+	return id, nil
 }
 
 func TestShorten_NewURL(t *testing.T) {
@@ -84,6 +101,69 @@ func TestShorten_AliasConflict(t *testing.T) {
 	_, err := svc.Shorten(ctx, "https://b.com", "dup")
 	if !errors.Is(err, storage.ErrAliasTaken) {
 		t.Fatalf("expected ErrAliasTaken, got %v", err)
+	}
+}
+
+// TestShorten_RetriesWhenGeneratedCodeClashesWithAlias covers the case where a
+// user has claimed a custom alias equal to a code the generator will later
+// produce. The generated code shares the alias's namespace, so the service must
+// skip the taken code and mint a working one — not fail the request.
+func TestShorten_RetriesWhenGeneratedCodeClashesWithAlias(t *testing.T) {
+	store := storage.NewMemoryStore()
+	// First id -> a code we pre-claim as an alias; second id -> a free code.
+	gen := &scriptedIDGen{ids: []uint64{1_000_000, 1_000_001}}
+	svc := New(store, gen, cache.NewNoop(), "http://short.test", time.Minute)
+	ctx := context.Background()
+
+	claimed := Encode(1_000_000)
+	if _, err := svc.Shorten(ctx, "https://example.com/claimed", claimed); err != nil {
+		t.Fatalf("claim alias %q: %v", claimed, err)
+	}
+
+	res, err := svc.Shorten(ctx, "https://example.com/auto", "")
+	if err != nil {
+		t.Fatalf("auto shorten must succeed by retrying past the taken code, got: %v", err)
+	}
+	if !res.Created {
+		t.Fatal("expected a newly created mapping")
+	}
+	if res.Link.Code == claimed {
+		t.Fatalf("generated code collided with claimed alias %q", claimed)
+	}
+	if want := Encode(1_000_001); res.Link.Code != want {
+		t.Fatalf("code = %q, want the retried id's code %q", res.Link.Code, want)
+	}
+
+	// The freshly created code must round-trip.
+	got, err := svc.ResolveURL(ctx, res.Link.Code)
+	if err != nil || got != "https://example.com/auto" {
+		t.Fatalf("resolve %q = %q err=%v", res.Link.Code, got, err)
+	}
+}
+
+// TestShorten_FailsWhenAllGeneratedCodesClash asserts the retry is bounded: if
+// every code the generator produces is already taken, Shorten returns an error
+// rather than looping forever.
+func TestShorten_FailsWhenAllGeneratedCodesClash(t *testing.T) {
+	store := storage.NewMemoryStore()
+	ids := make([]uint64, maxCodeAttempts)
+	for i := range ids {
+		ids[i] = 1_000_000 + uint64(i)
+	}
+	gen := &scriptedIDGen{ids: ids}
+	svc := New(store, gen, cache.NewNoop(), "http://short.test", time.Minute)
+	ctx := context.Background()
+
+	// Pre-claim every code the generator will produce, as custom aliases.
+	for _, id := range ids {
+		code := Encode(id)
+		if _, err := svc.Shorten(ctx, "https://example.com/"+code, code); err != nil {
+			t.Fatalf("claim alias %q: %v", code, err)
+		}
+	}
+
+	if _, err := svc.Shorten(ctx, "https://example.com/auto", ""); err == nil {
+		t.Fatal("expected shorten to fail after exhausting code attempts, got nil")
 	}
 }
 

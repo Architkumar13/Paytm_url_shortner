@@ -101,6 +101,15 @@ func (s *PostgresStore) CreateLink(ctx context.Context, link *Link) (bool, error
 	if err == nil {
 		return true, nil
 	}
+	// A unique violation here is on the code index: the original_url conflict is
+	// absorbed by ON CONFLICT DO NOTHING (which yields pgx.ErrNoRows, handled
+	// below), so the only constraint left to break is links_code_key — the
+	// generated code collided with a code already claimed as a custom alias.
+	// Signal the service to retry with a fresh id.
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == uniqueViolation {
+		return false, ErrCodeExists
+	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return false, err
 	}

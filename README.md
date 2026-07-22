@@ -255,6 +255,11 @@ The base62 alphabet (`0-9A-Za-z`) is URL-safe, so codes never need percent-encod
 are used verbatim, with uniqueness enforced by a database `UNIQUE` constraint (a clash returns
 `409`).
 
+Auto-generated codes are collision-free *within their own space*, but they share the `code`
+namespace with custom aliases, so a generated code can land on one a user already claimed. That is
+detected (the store returns `ErrCodeExists` on the `code` unique constraint) and the service mints a
+fresh id and retries — bounded by `maxCodeAttempts` — so the clash never surfaces to the client.
+
 Trade-off: sequential codes are enumerable/guessable. Since the requirement is *no collisions* (not
 unguessability), the simple approach is used; mitigations are in `WRITEUP.md`.
 

@@ -69,6 +69,26 @@ func TestMemoryStore_AliasTaken(t *testing.T) {
 	}
 }
 
+// TestMemoryStore_AutoCodeCollisionReturnsErrCodeExists asserts that an
+// auto-generated (non-custom) insert whose code is already taken by a custom
+// alias reports ErrCodeExists — distinct from ErrAliasTaken — so the service
+// can retry with a fresh id rather than surfacing the clash to the client.
+func TestMemoryStore_AutoCodeCollisionReturnsErrCodeExists(t *testing.T) {
+	ctx := context.Background()
+	m := NewMemoryStore()
+
+	// A custom alias occupies code "4C92".
+	if _, err := m.CreateLink(ctx, &Link{Code: "4C92", OriginalURL: "https://a.com", IsCustom: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	// An auto-generated code lands on the same string but a different URL.
+	_, err := m.CreateLink(ctx, &Link{Code: "4C92", OriginalURL: "https://b.com", IsCustom: false})
+	if !errors.Is(err, ErrCodeExists) {
+		t.Fatalf("expected ErrCodeExists, got %v", err)
+	}
+}
+
 func TestMemoryStore_RecordClickAndRecent(t *testing.T) {
 	ctx := context.Background()
 	m := NewMemoryStore()

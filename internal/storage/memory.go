@@ -52,9 +52,10 @@ func (m *MemoryStore) CreateLink(_ context.Context, link *Link) (bool, error) {
 			*link = *existing // idempotent: return the existing mapping
 			return false, nil
 		}
-		// A generated code should never collide, but guard anyway.
+		// A generated code can collide with a code already claimed as a custom
+		// alias (both share the code namespace). Signal a retry with a fresh id.
 		if _, exists := m.byCode[link.Code]; exists {
-			return false, ErrAliasTaken
+			return false, ErrCodeExists
 		}
 	}
 

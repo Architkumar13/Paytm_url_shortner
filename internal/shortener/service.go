@@ -3,6 +3,7 @@ package shortener
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"time"
 
@@ -10,6 +11,13 @@ import (
 	"urlshortener/internal/storage"
 	"urlshortener/internal/validate"
 )
+
+// maxCodeAttempts bounds how many times Shorten mints a fresh id when a
+// generated code collides with an existing one (a custom alias occupying the
+// same code namespace). Each attempt draws a distinct id, so a small bound
+// tolerates several pre-claimed codes while still failing fast if something is
+// pathologically wrong rather than looping forever.
+const maxCodeAttempts = 10
 
 // Service holds the URL-shortening business logic. It is transport-agnostic
 // (no HTTP types leak in) and depends only on interfaces — storage.Store,
@@ -75,19 +83,29 @@ func (s *Service) Shorten(ctx context.Context, rawURL, alias string) (*ShortenRe
 		return nil, err
 	}
 
-	// Collision-free code = base62 of a unique id (see idgen.go).
-	id, err := s.idgen.NextID(ctx)
-	if err != nil {
+	// Collision-free code = base62 of a unique id (see idgen.go). base62(id) is
+	// unique across auto-generated codes by construction, but the code namespace
+	// is shared with custom aliases, so a generated code can land on one a user
+	// already claimed. In that (rare) case CreateLink returns ErrCodeExists and
+	// we mint a fresh id and retry, bounded by maxCodeAttempts.
+	for attempt := 0; attempt < maxCodeAttempts; attempt++ {
+		id, err := s.idgen.NextID(ctx)
+		if err != nil {
+			return nil, err
+		}
+		link := &storage.Link{Code: Encode(id), OriginalURL: normalized, IsCustom: false}
+		// CreateLink is idempotent on the URL, so a concurrent creator is handled:
+		// link is overwritten with the winning row and Created reports false.
+		created, err := s.store.CreateLink(ctx, link)
+		if err == nil {
+			return &ShortenResult{Link: link, Created: created}, nil
+		}
+		if errors.Is(err, storage.ErrCodeExists) {
+			continue // generated code clashed with a custom alias; try a new id
+		}
 		return nil, err
 	}
-	link := &storage.Link{Code: Encode(id), OriginalURL: normalized, IsCustom: false}
-	// CreateLink is idempotent on the URL, so a concurrent creator is handled:
-	// link is overwritten with the winning row and Created reports false.
-	created, err := s.store.CreateLink(ctx, link)
-	if err != nil {
-		return nil, err
-	}
-	return &ShortenResult{Link: link, Created: created}, nil
+	return nil, fmt.Errorf("could not allocate a free short code after %d attempts", maxCodeAttempts)
 }
 
 // ResolveURL returns the original URL for a code, using the read-through cache:

@@ -13,6 +13,11 @@ var (
 	ErrNotFound = errors.New("code not found")
 	// ErrAliasTaken is returned when a requested custom alias already exists.
 	ErrAliasTaken = errors.New("alias already taken")
+	// ErrCodeExists is returned when an auto-generated code collides with an
+	// existing code (e.g. one already claimed as a custom alias — the two share
+	// the code namespace). It signals the service to retry with a fresh id; it
+	// is never surfaced to clients.
+	ErrCodeExists = errors.New("code already exists")
 )
 
 // Link is a stored short-code → URL mapping with its analytics counters.
@@ -49,7 +54,9 @@ type Store interface {
 	//   - Auto link (IsCustom == false): idempotent on OriginalURL. If a
 	//     non-custom mapping for that URL already exists (e.g. a concurrent
 	//     request created it first), *link is overwritten with the existing
-	//     row and created is false.
+	//     row and created is false. If the generated Code is already taken (by a
+	//     custom alias or another mapping) it returns ErrCodeExists, so the
+	//     caller can retry with a fresh id.
 	//
 	// created reports whether a new row was actually inserted.
 	CreateLink(ctx context.Context, link *Link) (created bool, err error)
