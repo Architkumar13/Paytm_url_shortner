@@ -1,0 +1,18 @@
+# Binaries
+/bin/
+/server
+urlshortener
+
+# Test / coverage artifacts
+*.out
+coverage.*
+
+# Env & editor
+.env
+.env.local
+.idea/
+.vscode/
+.DS_Store
+
+# Local tooling state (Claude Code, etc.)
+.claude/
