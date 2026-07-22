@@ -3,23 +3,36 @@ package shortener
 import (
 	"context"
 	"errors"
+	"log"
+	"time"
 
+	"urlshortener/internal/cache"
 	"urlshortener/internal/storage"
 	"urlshortener/internal/validate"
 )
 
 // Service holds the URL-shortening business logic. It is transport-agnostic
-// (no HTTP types leak in) and depends only on the storage.Store interface,
-// which keeps it trivially unit-testable against the in-memory store.
+// (no HTTP types leak in) and depends only on interfaces — storage.Store,
+// IDGenerator and cache.Cache — which keeps it trivially unit-testable and lets
+// each collaborator be swapped independently.
 type Service struct {
-	store   storage.Store
-	baseURL string
+	store    storage.Store
+	idgen    IDGenerator
+	cache    cache.Cache
+	baseURL  string
+	cacheTTL time.Duration
 }
 
-// New returns a Service backed by store, using baseURL to build absolute short
-// links (e.g. "http://localhost:8080").
-func New(store storage.Store, baseURL string) *Service {
-	return &Service{store: store, baseURL: baseURL}
+// New wires a Service. idgen supplies collision-free ids; cache is the
+// read-through cache for redirects (pass cache.NewNoop() to disable).
+func New(store storage.Store, idgen IDGenerator, c cache.Cache, baseURL string, cacheTTL time.Duration) *Service {
+	return &Service{
+		store:    store,
+		idgen:    idgen,
+		cache:    c,
+		baseURL:  baseURL,
+		cacheTTL: cacheTTL,
+	}
 }
 
 // ShortenResult is the outcome of a Shorten call.
@@ -55,18 +68,19 @@ func (s *Service) Shorten(ctx context.Context, rawURL, alias string) (*ShortenRe
 		return &ShortenResult{Link: link, Created: created}, nil
 	}
 
-	// Fast path: return an existing mapping without burning a sequence value.
+	// Fast path: return an existing mapping without burning an id.
 	if existing, err := s.store.GetByURL(ctx, normalized); err == nil {
 		return &ShortenResult{Link: existing, Created: false}, nil
 	} else if !errors.Is(err, storage.ErrNotFound) {
 		return nil, err
 	}
 
-	seq, err := s.store.NextSequence(ctx)
+	// Collision-free code = base62 of a unique id (see idgen.go).
+	id, err := s.idgen.NextID(ctx)
 	if err != nil {
 		return nil, err
 	}
-	link := &storage.Link{Code: Encode(seq), OriginalURL: normalized, IsCustom: false}
+	link := &storage.Link{Code: Encode(id), OriginalURL: normalized, IsCustom: false}
 	// CreateLink is idempotent on the URL, so a concurrent creator is handled:
 	// link is overwritten with the winning row and Created reports false.
 	created, err := s.store.CreateLink(ctx, link)
@@ -76,9 +90,29 @@ func (s *Service) Shorten(ctx context.Context, rawURL, alias string) (*ShortenRe
 	return &ShortenResult{Link: link, Created: created}, nil
 }
 
-// Resolve returns the mapping for code, or storage.ErrNotFound.
-func (s *Service) Resolve(ctx context.Context, code string) (*storage.Link, error) {
-	return s.store.GetByCode(ctx, code)
+// ResolveURL returns the original URL for a code, using the read-through cache:
+// on a hit it avoids the datastore entirely; on a miss it loads from the store
+// and populates the cache. This is the hot redirect path. Returns
+// storage.ErrNotFound for an unknown code.
+//
+// The code->URL mapping is immutable once created, so cached entries never go
+// stale and no invalidation is required.
+func (s *Service) ResolveURL(ctx context.Context, code string) (string, error) {
+	key := cache.Key(code)
+	if url, found, err := s.cache.Get(ctx, key); err != nil {
+		log.Printf("cache get %q: %v", code, err) // degrade gracefully to the store
+	} else if found {
+		return url, nil
+	}
+
+	link, err := s.store.GetByCode(ctx, code)
+	if err != nil {
+		return "", err
+	}
+	if err := s.cache.Set(ctx, key, link.OriginalURL, s.cacheTTL); err != nil {
+		log.Printf("cache set %q: %v", code, err) // best-effort
+	}
+	return link.OriginalURL, nil
 }
 
 // RecordClick records analytics for a visit. It is best-effort: the caller
@@ -88,6 +122,7 @@ func (s *Service) RecordClick(ctx context.Context, code string, click storage.Cl
 }
 
 // Stats bundles a link with its most recent clicks for the stats endpoint.
+// It reads from the datastore directly (not the cache) so counters are fresh.
 type Stats struct {
 	Link         *storage.Link
 	RecentClicks []storage.Click
@@ -106,9 +141,12 @@ func (s *Service) Stats(ctx context.Context, code string, limit int) (*Stats, er
 	return &Stats{Link: link, RecentClicks: clicks}, nil
 }
 
-// Ping reports datastore health.
+// Ping reports health of the datastore and cache.
 func (s *Service) Ping(ctx context.Context) error {
-	return s.store.Ping(ctx)
+	if err := s.store.Ping(ctx); err != nil {
+		return err
+	}
+	return s.cache.Ping(ctx)
 }
 
 // ShortURL builds the absolute short link for a code.

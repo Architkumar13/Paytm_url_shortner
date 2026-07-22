@@ -4,13 +4,16 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
+	"urlshortener/internal/cache"
 	"urlshortener/internal/storage"
 	"urlshortener/internal/validate"
 )
 
 func newService() *Service {
-	return New(storage.NewMemoryStore(), "http://short.test")
+	store := storage.NewMemoryStore()
+	return New(store, NewSequenceGenerator(store), cache.NewNoop(), "http://short.test", time.Minute)
 }
 
 func TestShorten_NewURL(t *testing.T) {
@@ -102,10 +105,37 @@ func TestShorten_InvalidInputs(t *testing.T) {
 	}
 }
 
-func TestResolve_UnknownReturnsNotFound(t *testing.T) {
+func TestResolveURL_UnknownReturnsNotFound(t *testing.T) {
 	svc := newService()
-	if _, err := svc.Resolve(context.Background(), "nope"); !errors.Is(err, storage.ErrNotFound) {
+	if _, err := svc.ResolveURL(context.Background(), "nope"); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestResolveURL_ReadThroughCache(t *testing.T) {
+	store := storage.NewMemoryStore()
+	c := cache.NewMemory()
+	svc := New(store, NewSequenceGenerator(store), c, "http://short.test", time.Minute)
+	ctx := context.Background()
+
+	res, err := svc.Shorten(ctx, "https://example.com/cached", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	code := res.Link.Code
+
+	// First resolve: cache miss -> store -> cache populated.
+	url, err := svc.ResolveURL(ctx, code)
+	if err != nil || url != "https://example.com/cached" {
+		t.Fatalf("resolve = %q err=%v", url, err)
+	}
+	if v, found, _ := c.Get(ctx, cache.Key(code)); !found || v != "https://example.com/cached" {
+		t.Fatalf("expected cache populated: found=%v v=%q", found, v)
+	}
+
+	// Second resolve is served correctly (from cache).
+	if url2, _ := svc.ResolveURL(ctx, code); url2 != url {
+		t.Fatalf("second resolve = %q, want %q", url2, url)
 	}
 }
 

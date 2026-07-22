@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"urlshortener/internal/cache"
 	"urlshortener/internal/config"
 	"urlshortener/internal/httpapi"
 	"urlshortener/internal/shortener"
@@ -26,14 +27,24 @@ func main() {
 	}
 	defer store.Close()
 
-	svc := shortener.New(store, cfg.BaseURL)
+	c, err := openCache(cfg)
+	if err != nil {
+		log.Fatalf("init cache: %v", err)
+	}
+	defer c.Close()
+
+	idgen, err := buildIDGenerator(cfg, store)
+	if err != nil {
+		log.Fatalf("init id generator: %v", err)
+	}
+
+	svc := shortener.New(store, idgen, c, cfg.BaseURL, cfg.CacheTTL)
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           httpapi.NewRouter(svc),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
-	// Run the server until an interrupt/terminate signal arrives.
 	serverErr := make(chan error, 1)
 	go func() {
 		log.Printf("listening on %s (base_url=%s)", srv.Addr, cfg.BaseURL)
@@ -69,9 +80,8 @@ func openStore(cfg config.Config) (storage.Store, error) {
 	}
 
 	ctx := context.Background()
-	const attempts = 10
 	var lastErr error
-	for i := 1; i <= attempts; i++ {
+	for i := 1; i <= 10; i++ {
 		pg, err := storage.NewPostgresStore(ctx, cfg.DatabaseURL)
 		if err == nil {
 			if err = pg.Migrate(ctx); err != nil {
@@ -81,8 +91,47 @@ func openStore(cfg config.Config) (storage.Store, error) {
 			return pg, nil
 		}
 		lastErr = err
-		log.Printf("postgres not ready (attempt %d/%d): %v", i, attempts, err)
+		log.Printf("postgres not ready (attempt %d/10): %v", i, err)
 		time.Sleep(2 * time.Second)
 	}
 	return nil, lastErr
+}
+
+// openCache returns a Redis cache when REDIS_URL is set (retrying while it
+// starts), otherwise a no-op cache so the service runs without Redis.
+func openCache(cfg config.Config) (cache.Cache, error) {
+	if cfg.RedisURL == "" {
+		log.Println("REDIS_URL not set; caching disabled")
+		return cache.NewNoop(), nil
+	}
+
+	ctx := context.Background()
+	var lastErr error
+	for i := 1; i <= 10; i++ {
+		rc, err := cache.NewRedis(ctx, cfg.RedisURL)
+		if err == nil {
+			log.Printf("connected to redis; read-through cache enabled (ttl=%s)", cfg.CacheTTL)
+			return rc, nil
+		}
+		lastErr = err
+		log.Printf("redis not ready (attempt %d/10): %v", i, err)
+		time.Sleep(2 * time.Second)
+	}
+	return nil, lastErr
+}
+
+// buildIDGenerator selects the collision-free id source from config.
+func buildIDGenerator(cfg config.Config, store storage.Store) (shortener.IDGenerator, error) {
+	switch cfg.IDGenerator {
+	case "snowflake":
+		gen, err := shortener.NewSnowflake(cfg.MachineID)
+		if err != nil {
+			return nil, err
+		}
+		log.Printf("id generator: snowflake (machine_id=%d)", cfg.MachineID)
+		return gen, nil
+	default:
+		log.Println("id generator: sequence")
+		return shortener.NewSequenceGenerator(store), nil
+	}
 }

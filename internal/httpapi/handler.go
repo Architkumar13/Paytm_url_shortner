@@ -95,7 +95,7 @@ func (h *Handler) shorten(w http.ResponseWriter, r *http.Request) {
 
 func (h *Handler) redirect(w http.ResponseWriter, r *http.Request) {
 	code := r.PathValue("code")
-	link, err := h.svc.Resolve(r.Context(), code)
+	originalURL, err := h.svc.ResolveURL(r.Context(), code) // read-through cache
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "short code not found")
@@ -116,7 +116,7 @@ func (h *Handler) redirect(w http.ResponseWriter, r *http.Request) {
 		log.Printf("record click %q: %v", code, err)
 	}
 
-	http.Redirect(w, r, link.OriginalURL, http.StatusMovedPermanently)
+	http.Redirect(w, r, originalURL, http.StatusMovedPermanently)
 }
 
 type statsResponse struct {

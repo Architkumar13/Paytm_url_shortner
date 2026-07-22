@@ -6,13 +6,16 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
+	"urlshortener/internal/cache"
 	"urlshortener/internal/shortener"
 	"urlshortener/internal/storage"
 )
 
 func newTestRouter() http.Handler {
-	svc := shortener.New(storage.NewMemoryStore(), "http://short.test")
+	store := storage.NewMemoryStore()
+	svc := shortener.New(store, shortener.NewSequenceGenerator(store), cache.NewMemory(), "http://short.test", time.Minute)
 	return NewRouter(svc)
 }
 
