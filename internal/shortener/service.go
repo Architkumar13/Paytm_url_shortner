@@ -133,12 +133,19 @@ func (s *Service) ResolveURL(ctx context.Context, code string) (string, error) {
 	return link.OriginalURL, nil
 }
 
-// Ping reports health of the datastore and cache.
+// Ping reports readiness. Only the datastore — the source of truth — gates
+// health: if it is unreachable the service cannot serve, so we fail. The cache
+// is optional (ResolveURL degrades to the store when it is down), so a cache
+// failure is logged but does not fail the check; otherwise a transient Redis
+// blip would evict a still-serving instance from the load balancer.
 func (s *Service) Ping(ctx context.Context) error {
 	if err := s.store.Ping(ctx); err != nil {
 		return err
 	}
-	return s.cache.Ping(ctx)
+	if err := s.cache.Ping(ctx); err != nil {
+		log.Printf("cache ping: %v (still serving from store)", err)
+	}
+	return nil
 }
 
 // ShortURL builds the absolute short link for a code.
