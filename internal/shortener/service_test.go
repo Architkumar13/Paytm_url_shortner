@@ -237,26 +237,3 @@ func TestShorten_CodesAreUnique(t *testing.T) {
 		seen[res.Link.Code] = true
 	}
 }
-
-func TestStats_TracksClicks(t *testing.T) {
-	svc := newService()
-	ctx := context.Background()
-	res, _ := svc.Shorten(ctx, "https://example.com", "")
-	code := res.Link.Code
-
-	for i := 0; i < 5; i++ {
-		if err := svc.RecordClick(ctx, code, storage.Click{UserAgent: "test"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	st, err := svc.Stats(ctx, code, 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if st.Link.ClickCount != 5 {
-		t.Fatalf("ClickCount = %d, want 5", st.Link.ClickCount)
-	}
-	if len(st.RecentClicks) != 5 {
-		t.Fatalf("RecentClicks = %d, want 5", len(st.RecentClicks))
-	}
-}

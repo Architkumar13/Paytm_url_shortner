@@ -1,8 +1,7 @@
-# URL Shortener & Link Analytics
+# URL Shortener
 
-A small Go service that turns long URLs into short codes, 301-redirects visitors to the
-original link, and tracks lightweight click analytics. Persisted in Postgres, runnable with
-a single `docker compose up`.
+A small Go service that turns long URLs into short codes and 301-redirects visitors to the
+original link. Persisted in Postgres, runnable with a single `docker compose up`.
 
 - **Language:** Go 1.25 (standard-library `net/http` routing — no web framework)
 - **Datastore:** Postgres 16, behind a `Store` interface with an in-memory implementation for tests
@@ -29,12 +28,12 @@ flowchart LR
     end
 
     Redis[("Redis<br/>read-through cache<br/>code → URL")]
-    PG[("PostgreSQL<br/>links + clicks<br/>source of truth")]
+    PG[("PostgreSQL<br/>links<br/>source of truth")]
 
     Client -->|POST /shorten| HTTP
     Client -->|GET /code| HTTP
     SVC -->|"read (redirect): cache-first"| Redis
-    SVC -->|"write + analytics + cache miss"| PG
+    SVC -->|"write + cache miss"| PG
 ```
 
 Postgres is the source of truth; Redis is a read-through cache on the hot redirect path. The service
@@ -94,8 +93,6 @@ sequenceDiagram
             A->>R: SET url:{code} (TTL = CACHE_TTL)
         end
     end
-    Note over A,DB: on success only
-    A->>DB: record click — count++, last_access, click row (best-effort)
     A-->>C: 301 Moved Permanently (Location: original URL)
 ```
 
@@ -185,21 +182,6 @@ Response:
 
 `301 Moved Permanently` to the original URL, or `404 Not Found` for an unknown code.
 
-### `GET /api/links/{code}/stats`
-
-```json
-{
-  "code": "4C92",
-  "short_url": "http://localhost:8080/4C92",
-  "original_url": "https://example.com/...",
-  "is_custom": false,
-  "click_count": 3,
-  "created_at": "2026-07-22T12:00:00Z",
-  "last_access_at": "2026-07-22T12:05:00Z",
-  "recent_clicks": [ { "clicked_at": "...", "referer": "...", "user_agent": "...", "ip": "..." } ]
-}
-```
-
 ### `GET /healthz`
 
 `200 OK` when the datastore is reachable (used as the container health check), else `503`.
@@ -222,9 +204,6 @@ curl -s -XPOST localhost:8080/shorten -H 'Content-Type: application/json' \
 
 # redirect (show headers)
 curl -sI localhost:8080/promo
-
-# analytics
-curl -s localhost:8080/api/links/promo/stats
 ```
 
 ---
@@ -270,8 +249,7 @@ redirect path. `GET /{code}` checks Redis for `code → original URL`; on a hit 
 touching Postgres, and on a miss it loads from Postgres, populates the cache (TTL `CACHE_TTL`, default
 24h) and redirects. The `code → URL` mapping is **immutable** once created, so cached entries never go
 stale and **no invalidation is needed**. When `REDIS_URL` is unset the service uses a no-op cache and
-reads straight from the store, so it still runs with zero cache infrastructure. Analytics counting
-still writes to Postgres on each hit (the cache covers reads, not the click write).
+reads straight from the store, so it still runs with zero cache infrastructure.
 
 ### Duplicate-URL handling (deliberate)
 
@@ -285,8 +263,7 @@ also makes de-duplication race-safe under concurrent requests (via `INSERT ... O
 
 ### Data model
 
-`links` (`id`, `code` UNIQUE, `original_url`, `is_custom`, `click_count`, `created_at`,
-`last_access_at`) and `clicks` (per-visit rows referencing `links`, `ON DELETE CASCADE`). See
+`links` (`id`, `code` UNIQUE, `original_url`, `is_custom`, `created_at`). See
 `internal/storage/migrations/001_init.sql`.
 
 ### Layout
@@ -301,11 +278,10 @@ internal/validate   URL and alias validation
 internal/httpapi    HTTP handlers, routing, middleware
 ```
 
-### Analytics & the 301 caveat
+### Redirects
 
-Redirects use `301` as specified. Browsers cache 301s aggressively, so repeat visits may not reach
-the server and can undercount clicks. A `302` would count every visit at the cost of no caching.
-This is discussed in `WRITEUP.md`.
+`GET /{code}` returns `301 Moved Permanently` as specified. The `code → URL` mapping is permanent,
+so `301` is the correct semantic and lets browsers cache the redirect.
 
 ## Configuration
 

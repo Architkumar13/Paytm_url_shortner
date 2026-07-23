@@ -31,7 +31,7 @@ func newPostgresForTest(t *testing.T) *PostgresStore {
 	return store
 }
 
-func TestPostgres_CreateDedupAliasClicks(t *testing.T) {
+func TestPostgres_CreateDedupAndLookup(t *testing.T) {
 	ctx := context.Background()
 	store := newPostgresForTest(t)
 
@@ -58,13 +58,10 @@ func TestPostgres_CreateDedupAliasClicks(t *testing.T) {
 		t.Fatalf("expected dedup to existing code %q, got created=%v code=%q", link.Code, created, dup.Code)
 	}
 
-	// Clicks.
-	if err := store.RecordClick(ctx, link.Code, Click{UserAgent: "it"}); err != nil {
-		t.Fatal(err)
-	}
+	// Lookup by code round-trips to the same URL.
 	got, err := store.GetByCode(ctx, link.Code)
-	if err != nil || got.ClickCount != 1 {
-		t.Fatalf("click_count=%d err=%v", got.ClickCount, err)
+	if err != nil || got.OriginalURL != url {
+		t.Fatalf("GetByCode = %q err=%v, want %q", got.OriginalURL, err, url)
 	}
 
 	if _, err := store.GetByCode(ctx, "definitely-missing-code"); !errors.Is(err, ErrNotFound) {

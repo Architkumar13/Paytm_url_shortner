@@ -122,11 +122,11 @@ func (s *PostgresStore) CreateLink(ctx context.Context, link *Link) (bool, error
 	return false, nil
 }
 
-const linkColumns = `id, code, original_url, is_custom, click_count, created_at, last_access_at`
+const linkColumns = `id, code, original_url, is_custom, created_at`
 
 func scanLink(row pgx.Row) (*Link, error) {
 	var l Link
-	err := row.Scan(&l.ID, &l.Code, &l.OriginalURL, &l.IsCustom, &l.ClickCount, &l.CreatedAt, &l.LastAccessAt)
+	err := row.Scan(&l.ID, &l.Code, &l.OriginalURL, &l.IsCustom, &l.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -145,57 +145,6 @@ func (s *PostgresStore) GetByURL(ctx context.Context, originalURL string) (*Link
 func (s *PostgresStore) GetByCode(ctx context.Context, code string) (*Link, error) {
 	return scanLink(s.pool.QueryRow(ctx,
 		`SELECT `+linkColumns+` FROM links WHERE code = $1`, code))
-}
-
-func (s *PostgresStore) RecordClick(ctx context.Context, code string, click Click) error {
-	tx, err := s.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after a successful Commit
-
-	var linkID int64
-	err = tx.QueryRow(ctx,
-		`UPDATE links SET click_count = click_count + 1, last_access_at = now()
-		 WHERE code = $1 RETURNING id`, code).Scan(&linkID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrNotFound
-	}
-	if err != nil {
-		return err
-	}
-	if _, err := tx.Exec(ctx,
-		`INSERT INTO clicks (link_id, referer, user_agent, ip) VALUES ($1, $2, $3, $4)`,
-		linkID, click.Referer, click.UserAgent, click.IP); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-func (s *PostgresStore) RecentClicks(ctx context.Context, code string, limit int) ([]Click, error) {
-	if _, err := s.GetByCode(ctx, code); err != nil {
-		return nil, err
-	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT c.clicked_at, c.referer, c.user_agent, c.ip
-		 FROM clicks c JOIN links l ON l.id = c.link_id
-		 WHERE l.code = $1
-		 ORDER BY c.clicked_at DESC
-		 LIMIT $2`, code, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	out := make([]Click, 0, limit)
-	for rows.Next() {
-		var c Click
-		if err := rows.Scan(&c.ClickedAt, &c.Referer, &c.UserAgent, &c.IP); err != nil {
-			return nil, err
-		}
-		out = append(out, c)
-	}
-	return out, rows.Err()
 }
 
 func (s *PostgresStore) Ping(ctx context.Context) error { return s.pool.Ping(ctx) }

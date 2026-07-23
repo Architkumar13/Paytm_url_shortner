@@ -133,32 +133,6 @@ func (s *Service) ResolveURL(ctx context.Context, code string) (string, error) {
 	return link.OriginalURL, nil
 }
 
-// RecordClick records analytics for a visit. It is best-effort: the caller
-// should not fail a redirect if this errors.
-func (s *Service) RecordClick(ctx context.Context, code string, click storage.Click) error {
-	return s.store.RecordClick(ctx, code, click)
-}
-
-// Stats bundles a link with its most recent clicks for the stats endpoint.
-// It reads from the datastore directly (not the cache) so counters are fresh.
-type Stats struct {
-	Link         *storage.Link
-	RecentClicks []storage.Click
-}
-
-// Stats returns analytics for code, or storage.ErrNotFound.
-func (s *Service) Stats(ctx context.Context, code string, limit int) (*Stats, error) {
-	link, err := s.store.GetByCode(ctx, code)
-	if err != nil {
-		return nil, err
-	}
-	clicks, err := s.store.RecentClicks(ctx, code, limit)
-	if err != nil {
-		return nil, err
-	}
-	return &Stats{Link: link, RecentClicks: clicks}, nil
-}
-
 // Ping reports health of the datastore and cache.
 func (s *Service) Ping(ctx context.Context) error {
 	if err := s.store.Ping(ctx); err != nil {

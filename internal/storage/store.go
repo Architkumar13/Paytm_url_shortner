@@ -1,5 +1,5 @@
-// Package storage defines the persistence contract for links and click
-// analytics, plus the in-memory and Postgres implementations of it.
+// Package storage defines the persistence contract for links, plus the
+// in-memory and Postgres implementations of it.
 package storage
 
 import (
@@ -20,23 +20,13 @@ var (
 	ErrCodeExists = errors.New("code already exists")
 )
 
-// Link is a stored short-code → URL mapping with its analytics counters.
+// Link is a stored short-code → URL mapping.
 type Link struct {
-	ID           int64      `json:"-"`
-	Code         string     `json:"code"`
-	OriginalURL  string     `json:"original_url"`
-	IsCustom     bool       `json:"is_custom"`
-	ClickCount   int64      `json:"click_count"`
-	CreatedAt    time.Time  `json:"created_at"`
-	LastAccessAt *time.Time `json:"last_access_at,omitempty"`
-}
-
-// Click is a single recorded visit to a short link.
-type Click struct {
-	ClickedAt time.Time `json:"clicked_at"`
-	Referer   string    `json:"referer,omitempty"`
-	UserAgent string    `json:"user_agent,omitempty"`
-	IP        string    `json:"ip,omitempty"`
+	ID          int64     `json:"-"`
+	Code        string    `json:"code"`
+	OriginalURL string    `json:"original_url"`
+	IsCustom    bool      `json:"is_custom"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // Store is the persistence contract. Implementations must be safe for
@@ -67,14 +57,6 @@ type Store interface {
 
 	// GetByCode returns the mapping for a code, or ErrNotFound.
 	GetByCode(ctx context.Context, code string) (*Link, error)
-
-	// RecordClick increments the link's counter, updates its last-access time
-	// and appends a click record. Returns ErrNotFound for an unknown code.
-	RecordClick(ctx context.Context, code string, click Click) error
-
-	// RecentClicks returns up to limit most-recent clicks (newest first) for a
-	// code, or ErrNotFound.
-	RecentClicks(ctx context.Context, code string, limit int) ([]Click, error)
 
 	// Ping verifies the datastore is reachable.
 	Ping(ctx context.Context) error

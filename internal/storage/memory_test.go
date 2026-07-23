@@ -89,38 +89,6 @@ func TestMemoryStore_AutoCodeCollisionReturnsErrCodeExists(t *testing.T) {
 	}
 }
 
-func TestMemoryStore_RecordClickAndRecent(t *testing.T) {
-	ctx := context.Background()
-	m := NewMemoryStore()
-	if _, err := m.CreateLink(ctx, &Link{Code: "x", OriginalURL: "https://a.com"}); err != nil {
-		t.Fatal(err)
-	}
-
-	for i := 0; i < 3; i++ {
-		if err := m.RecordClick(ctx, "x", Click{Referer: "r", UserAgent: "ua"}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	got, _ := m.GetByCode(ctx, "x")
-	if got.ClickCount != 3 {
-		t.Fatalf("ClickCount = %d, want 3", got.ClickCount)
-	}
-	if got.LastAccessAt == nil {
-		t.Fatal("LastAccessAt not set after clicks")
-	}
-	recent, err := m.RecentClicks(ctx, "x", 2)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(recent) != 2 {
-		t.Fatalf("RecentClicks returned %d, want 2 (limit)", len(recent))
-	}
-
-	if err := m.RecordClick(ctx, "missing", Click{}); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("RecordClick on missing code: expected ErrNotFound, got %v", err)
-	}
-}
-
 // TestMemoryStore_NextSequenceUnique hammers NextSequence concurrently and
 // asserts every value is unique — the foundation of collision-free codes.
 func TestMemoryStore_NextSequenceUnique(t *testing.T) {

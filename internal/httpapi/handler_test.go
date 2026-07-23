@@ -133,39 +133,6 @@ func TestShortenBadInputs(t *testing.T) {
 	}
 }
 
-func TestStatsReflectClicks(t *testing.T) {
-	router := newTestRouter()
-
-	rec := do(t, router, "POST", "/shorten", `{"url":"https://example.com/stats"}`)
-	var resp shortenResponse
-	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
-
-	const clicks = 3
-	for i := 0; i < clicks; i++ {
-		do(t, router, "GET", "/"+resp.Code, "")
-	}
-
-	st := do(t, router, "GET", "/api/links/"+resp.Code+"/stats", "")
-	if st.Code != http.StatusOK {
-		t.Fatalf("stats status = %d, want 200", st.Code)
-	}
-	var stats statsResponse
-	if err := json.Unmarshal(st.Body.Bytes(), &stats); err != nil {
-		t.Fatal(err)
-	}
-	if stats.ClickCount != clicks {
-		t.Fatalf("click_count = %d, want %d", stats.ClickCount, clicks)
-	}
-	if len(stats.RecentClicks) != clicks {
-		t.Fatalf("recent_clicks = %d, want %d", len(stats.RecentClicks), clicks)
-	}
-
-	// Stats for an unknown code is 404.
-	if miss := do(t, router, "GET", "/api/links/nope/stats", ""); miss.Code != http.StatusNotFound {
-		t.Fatalf("stats unknown status = %d, want 404", miss.Code)
-	}
-}
-
 func TestHealthAndIndex(t *testing.T) {
 	router := newTestRouter()
 	if rec := do(t, router, "GET", "/healthz", ""); rec.Code != http.StatusOK {
